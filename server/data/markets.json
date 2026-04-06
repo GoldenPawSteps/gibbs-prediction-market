@@ -1,0 +1,35 @@
+{
+  "mkt_1775459677773_c91f874e": {
+    "id": "mkt_1775459677773_c91f874e",
+    "creatorId": "u_1775459676263",
+    "creatorName": "Maker",
+    "question": "Will smoke test pass?",
+    "outcomes": [
+      "Yes",
+      "No"
+    ],
+    "priors": [
+      0.5,
+      0.5
+    ],
+    "beta": 1.5,
+    "qs": [
+      2,
+      -1
+    ],
+    "subsidyPaid": 1.0397207708399179,
+    "status": "resolved",
+    "resolvedOutcomeIdx": 0,
+    "createdAt": "2026-04-06T07:14:37.773Z",
+    "resolvedAt": "2026-04-06T07:14:37.785Z",
+    "positions": {
+      "u_1775459676616": {
+        "email": "trader_1775459675819@test.local",
+        "qs": [
+          2,
+          -1
+        ]
+      }
+    }
+  }
+}

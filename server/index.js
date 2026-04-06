@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const USERS_PATH = process.env.DATA_USERS_PATH || join(__dirname, 'data', 'users.json');
 const MARKET_STATE_PATH = process.env.DATA_MARKET_STATE_PATH || join(__dirname, 'data', 'marketStates.json');
+const MARKETS_PATH = process.env.DATA_MARKETS_PATH || join(__dirname, 'data', 'markets.json');
 
 const PORT = Number(process.env.PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
@@ -345,6 +346,30 @@ function sanitizeUser(userRecord) {
     email: userRecord.email,
     balance: userRecord.balance ?? INITIAL_BALANCE,
     createdAt: userRecord.createdAt,
+  };
+}
+
+function sanitizeMarket(m) {
+  // Strip emails from position entries before sending to client
+  const positions = Object.fromEntries(
+    Object.entries(m.positions || {}).map(([uid, pos]) => [uid, { qs: pos.qs }])
+  );
+  return {
+    id: m.id,
+    creatorId: m.creatorId,
+    creatorName: m.creatorName,
+    question: m.question,
+    outcomes: m.outcomes,
+    priors: m.priors,
+    beta: m.beta,
+    qs: m.qs,
+    subsidyPaid: m.subsidyPaid,
+    status: m.status,
+    resolvedOutcomeIdx: m.resolvedOutcomeIdx,
+    createdAt: m.createdAt,
+    resolvedAt: m.resolvedAt,
+    traderCount: Object.keys(m.positions || {}).length,
+    positions,
   };
 }
 
@@ -1151,6 +1176,197 @@ app.post('/api/trade', authMiddleware, async (req, res) => {
   return res.json({ ok: true, balance: newBalance, tradeCost, newQs, newPrices, newCost });
 });
 
+// --- Public Markets ---
+
+app.post('/api/markets', authMiddleware, async (req, res) => {
+  const question = String(req.body?.question || '').trim();
+  const outcomes = req.body?.outcomes;
+  const priors = req.body?.priors;
+  const beta = req.body?.beta;
+
+  if (!question || question.length > 200) {
+    return res.status(400).json({ error: 'Question must be 1–200 characters.' });
+  }
+  if (!Array.isArray(outcomes) || outcomes.length < 2 || outcomes.length > 10) {
+    return res.status(400).json({ error: 'Provide between 2 and 10 outcomes.' });
+  }
+  if (!outcomes.every(o => typeof o === 'string' && o.trim().length > 0)) {
+    return res.status(400).json({ error: 'All outcomes must be non-empty strings.' });
+  }
+  if (!Array.isArray(priors) || priors.length !== outcomes.length) {
+    return res.status(400).json({ error: 'Priors length must match outcomes count.' });
+  }
+  if (!priors.every(p => typeof p === 'number' && Number.isFinite(p) && p > 0)) {
+    return res.status(400).json({ error: 'All priors must be positive finite numbers.' });
+  }
+  if (typeof beta !== 'number' || !Number.isFinite(beta) || beta <= 0 || beta > 100) {
+    return res.status(400).json({ error: 'Beta must be a positive number (max 100).' });
+  }
+
+  const priorsSum = priors.reduce((a, b) => a + b, 0);
+  const normPriors = priors.map(p => p / priorsSum);
+  // Worst-case market maker loss is bounded by beta * ln(n)
+  const subsidy = beta * Math.log(outcomes.length);
+  const { userId, email } = req.auth;
+  const marketId = `mkt_${Date.now()}_${randomBytes(4).toString('hex')}`;
+  const createdAt = new Date().toISOString();
+
+  let newBalance;
+  let createError = null;
+  let creatorName = '';
+  await withFileLock(USERS_PATH, () => {
+    const users = readJson(USERS_PATH);
+    const user = users[email];
+    if (!user) { createError = 'User not found.'; return; }
+    const balance = user.balance ?? INITIAL_BALANCE;
+    if (balance - subsidy < -0.005) { createError = 'Insufficient balance to fund market liquidity.'; return; }
+    user.balance = Math.max(0, balance - subsidy);
+    newBalance = user.balance;
+    creatorName = user.name;
+    users[email] = user;
+    writeJson(USERS_PATH, users);
+  });
+
+  if (createError) return res.status(400).json({ error: createError });
+
+  const market = {
+    id: marketId,
+    creatorId: userId,
+    creatorName,
+    question,
+    outcomes: outcomes.map(o => o.trim()),
+    priors: normPriors,
+    beta,
+    qs: outcomes.map(() => 0),
+    subsidyPaid: subsidy,
+    status: 'open',
+    resolvedOutcomeIdx: null,
+    createdAt,
+    resolvedAt: null,
+    positions: {},
+  };
+
+  await withFileLock(MARKETS_PATH, () => {
+    const markets = readJson(MARKETS_PATH);
+    markets[marketId] = market;
+    writeJson(MARKETS_PATH, markets);
+  });
+
+  logAuditEvent('market.create', { ip: getClientIp(req), userId, marketId, question });
+  return res.status(201).json({ ok: true, market: sanitizeMarket(market), balance: newBalance });
+});
+
+app.get('/api/markets', authMiddleware, (req, res) => {
+  const markets = readJson(MARKETS_PATH);
+  const list = Object.values(markets)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .map(sanitizeMarket);
+  return res.json({ markets: list });
+});
+
+app.post('/api/markets/:id/trade', authMiddleware, async (req, res) => {
+  const { id: marketId } = req.params;
+  const { deltaQs } = req.body || {};
+  const { userId, email } = req.auth;
+
+  if (!Array.isArray(deltaQs)) return res.status(400).json({ error: 'deltaQs must be an array.' });
+  if (!deltaQs.every(d => typeof d === 'number' && Number.isFinite(d))) {
+    return res.status(400).json({ error: 'deltaQs must be finite numbers.' });
+  }
+
+  const marketsSnap = readJson(MARKETS_PATH);
+  const market = marketsSnap[marketId];
+  if (!market) return res.status(404).json({ error: 'Market not found.' });
+  if (market.status !== 'open') return res.status(400).json({ error: 'Market is not open.' });
+  if (deltaQs.length !== market.outcomes.length) {
+    return res.status(400).json({ error: `Expected ${market.outcomes.length} deltaQs.` });
+  }
+
+  const tradeCost = _computeTradeCost(market.qs, deltaQs, market.priors, market.beta);
+  const newQs = market.qs.map((q, i) => q + deltaQs[i]);
+  const newPrices = _computePrices(newQs, market.priors, market.beta);
+  const newCost = _computeCost(newQs, market.priors, market.beta);
+
+  let newBalance;
+  let tradeError = null;
+  await withFileLock(USERS_PATH, () => {
+    const users = readJson(USERS_PATH);
+    const user = users[email];
+    if (!user) { tradeError = 'User not found.'; return; }
+    const balance = user.balance ?? INITIAL_BALANCE;
+    if (balance - tradeCost < -0.005) { tradeError = 'Insufficient balance.'; return; }
+    user.balance = Math.max(0, balance - tradeCost);
+    newBalance = user.balance;
+    users[email] = user;
+    writeJson(USERS_PATH, users);
+  });
+  if (tradeError) return res.status(400).json({ error: tradeError });
+
+  let updatedMarket;
+  await withFileLock(MARKETS_PATH, () => {
+    const markets = readJson(MARKETS_PATH);
+    const m = markets[marketId];
+    if (!m || m.status !== 'open') return;
+    m.qs = newQs;
+    const prev = m.positions[userId];
+    m.positions[userId] = {
+      email,
+      qs: prev ? prev.qs.map((q, i) => q + deltaQs[i]) : [...deltaQs],
+    };
+    markets[marketId] = m;
+    writeJson(MARKETS_PATH, markets);
+    updatedMarket = m;
+  });
+  if (!updatedMarket) return res.status(409).json({ error: 'Market state changed. Please retry.' });
+
+  logAuditEvent('market.trade', { ip: getClientIp(req), userId, marketId, tradeCost });
+  return res.json({ ok: true, balance: newBalance, tradeCost, newQs, newPrices, newCost, market: sanitizeMarket(updatedMarket) });
+});
+
+app.post('/api/markets/:id/resolve', authMiddleware, async (req, res) => {
+  const { id: marketId } = req.params;
+  const outcomeIdx = req.body?.outcomeIdx;
+  const { userId, email } = req.auth;
+
+  if (typeof outcomeIdx !== 'number' || !Number.isInteger(outcomeIdx) || outcomeIdx < 0) {
+    return res.status(400).json({ error: 'outcomeIdx must be a non-negative integer.' });
+  }
+
+  const marketsSnap = readJson(MARKETS_PATH);
+  const market = marketsSnap[marketId];
+  if (!market) return res.status(404).json({ error: 'Market not found.' });
+  if (market.creatorId !== userId) return res.status(403).json({ error: 'Only the creator can resolve this market.' });
+  if (market.status !== 'open') return res.status(400).json({ error: 'Market is already resolved.' });
+  if (outcomeIdx >= market.outcomes.length) return res.status(400).json({ error: 'Outcome index out of range.' });
+
+  // Credit each user whose position in the winning outcome is positive
+  await withFileLock(USERS_PATH, () => {
+    const users = readJson(USERS_PATH);
+    for (const pos of Object.values(market.positions)) {
+      const amount = pos.qs?.[outcomeIdx] ?? 0;
+      if (amount > 0.001 && users[pos.email]) {
+        users[pos.email].balance = (users[pos.email].balance ?? INITIAL_BALANCE) + amount;
+      }
+    }
+    writeJson(USERS_PATH, users);
+  });
+
+  let resolvedMarket;
+  await withFileLock(MARKETS_PATH, () => {
+    const markets = readJson(MARKETS_PATH);
+    markets[marketId].status = 'resolved';
+    markets[marketId].resolvedOutcomeIdx = outcomeIdx;
+    markets[marketId].resolvedAt = new Date().toISOString();
+    resolvedMarket = markets[marketId];
+    writeJson(MARKETS_PATH, markets);
+  });
+
+  const users = readJson(USERS_PATH);
+  const newBalance = users[email]?.balance ?? INITIAL_BALANCE;
+  logAuditEvent('market.resolve', { ip: getClientIp(req), userId, marketId, outcomeIdx });
+  return res.json({ ok: true, market: sanitizeMarket(resolvedMarket), balance: newBalance });
+});
+
 async function startServer() {
   if (DATA_ENCRYPTION.error) {
     throw new Error(DATA_ENCRYPTION.error);
@@ -1161,6 +1377,7 @@ async function startServer() {
 
   canDecryptJson(USERS_PATH);
   canDecryptJson(MARKET_STATE_PATH);
+  canDecryptJson(MARKETS_PATH);
   const encryptionHealth = refreshDataEncryptionHealth();
   if (encryptionHealth.migrationPending) {
     console.warn('WARNING: DATA_ENCRYPTION_KEY is set but one or more data files are still plaintext. Run `npm run migrate:data-encryption`.');

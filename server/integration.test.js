@@ -53,10 +53,11 @@ async function waitForServer(baseUrl, child, logs) {
   throw new Error(`Server did not become ready in time\n${logs.stdout}\n${logs.stderr}`);
 }
 
-async function startServer(extraEnv = {}, initialUsers = {}, initialMarketStates = {}) {
+async function startServer(extraEnv = {}, initialUsers = {}, initialMarketStates = {}, initialMarkets = {}) {
   const tempDir = await mkdtemp(join(tmpdir(), 'gibbs-server-test-'));
   const usersPath = await makeTempJsonFile(tempDir, 'users.json', initialUsers);
   const marketStatesPath = await makeTempJsonFile(tempDir, 'marketStates.json', initialMarketStates);
+  const marketsPath = await makeTempJsonFile(tempDir, 'markets.json', initialMarkets);
   const port = nextPort;
   nextPort += 1;
   const logs = { stdout: '', stderr: '' };
@@ -72,6 +73,7 @@ async function startServer(extraEnv = {}, initialUsers = {}, initialMarketStates
       TRUST_PROXY: '0',
       DATA_USERS_PATH: usersPath,
       DATA_MARKET_STATE_PATH: marketStatesPath,
+      DATA_MARKETS_PATH: marketsPath,
       ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -91,6 +93,7 @@ async function startServer(extraEnv = {}, initialUsers = {}, initialMarketStates
     baseUrl,
     usersPath,
     marketStatesPath,
+    marketsPath,
     logs,
     async stop() {
       if (child.exitCode === null) {
@@ -173,13 +176,10 @@ test('server integration coverage', async t => {
       });
 
       assert.equal(registerResult.response.status, 201);
-      assert.equal(registerResult.json.requiresEmailVerification, true);
+      assert.equal(registerResult.json.requiresEmailVerification, false);
 
       const users = await loadJson(ctx.usersPath);
-      users[email].emailVerified = true;
-      users[email].emailVerificationTokenHash = null;
-      users[email].emailVerificationExpiresAt = null;
-      await writeFile(ctx.usersPath, JSON.stringify(users, null, 2), 'utf8');
+      assert.equal(users[email].emailVerified, true);
 
       const loginResult = await requestJson(ctx.baseUrl, '/api/auth/login', {
         method: 'POST',

@@ -332,6 +332,8 @@ export default function App() {
                   balance={balance}
                   onExecuteTrade={handleExecuteTrade}
                   tradeError={tradeError}
+                  userId={auth.user?.id}
+                  onBalanceChange={setBalance}
                 />
               ) : (
                 <Navigate to="/login" replace />
