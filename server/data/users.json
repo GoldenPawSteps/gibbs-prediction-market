@@ -1,0 +1,19 @@
+{
+  "goldenpaw.steps@gmail.com": {
+    "id": "u_1775456657757",
+    "name": "Golden Paw",
+    "email": "goldenpaw.steps@gmail.com",
+    "passwordHash": "$2b$12$HesB/UdgV5IgoVC7xrwoPequw3BIo7ZfHaecntn/5d5f.cObNFvRq",
+    "emailVerified": true,
+    "emailVerificationTokenHash": null,
+    "emailVerificationExpiresAt": null,
+    "passwordResetTokenHash": null,
+    "passwordResetExpiresAt": null,
+    "refreshTokenHash": "$2b$10$Wz.swDtxpblaXndRcDiG1OYP796FNVrYw/X8mW9S6JLGN.gCBNqhC",
+    "refreshTokenId": "ae6ff7e9-a7c9-4318-a67d-466020cb9e9b",
+    "loginFailedAttempts": 0,
+    "loginLockoutUntil": null,
+    "createdAt": "2026-04-06T06:24:17.757Z",
+    "refreshTokenIssuedAt": "2026-04-06T06:24:25.992Z"
+  }
+}

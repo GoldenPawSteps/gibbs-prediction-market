@@ -33,8 +33,66 @@ The market maker uses:
 
 ```bash
 npm install
-npm run dev
+npm run dev:all
 ```
+
+This now starts:
+
+- Frontend (Vite) on `http://localhost:5173`
+- Backend API on `http://localhost:4000`
+
+If you want to run them separately:
+
+```bash
+npm run server   # API only
+npm run dev      # frontend only
+```
+
+## Authentication
+
+- `POST /api/auth/register` creates an account with bcrypt-hashed passwords
+- `POST /api/auth/login` authenticates and sets an HTTP-only JWT cookie session
+- `POST /api/auth/refresh` rotates refresh token and issues a new short-lived access token
+- `POST /api/auth/request-verification` sends a new email verification token
+- `POST /api/auth/verify-email` verifies email using token
+- `POST /api/auth/request-password-reset` sends a password reset token
+- `POST /api/auth/reset-password` sets a new password from reset token
+- `GET /api/auth/me` validates the current session
+- `POST /api/auth/logout` clears the auth cookie
+
+Session model:
+
+- Access token cookie is short-lived (`15m`)
+- Refresh token cookie is long-lived (`7d`) and rotated on refresh
+- Logout revokes the stored refresh token record
+
+### Email Configuration
+
+Email verification and password reset tokens are sent through SMTP. Configure:
+
+- `APP_BASE_URL` (example: `http://localhost:5173`)
+- `SMTP_PROVIDER` (`custom`, `resend`, `sendgrid`, `postmark`, or `mailgun`)
+- `EMAIL_FROM` (example: `noreply@example.com`)
+- `SMTP_HOST`
+- `SMTP_PORT` (example: `587`)
+- `SMTP_SECURE` (`true` or `false`)
+- `SMTP_USER`
+- `SMTP_PASS`
+
+Also set:
+
+- `JWT_SECRET` (required for production)
+
+If SMTP is not configured, token emails are skipped and authentication recovery flows will not deliver tokens.
+
+SMTP self-test health endpoint:
+
+- `GET /api/health/email` returns SMTP configuration/test status (provider, host, port, secure, and last error)
+
+User accounts and per-user market state are stored locally in:
+
+- `server/data/users.json`
+- `server/data/marketStates.json`
 
 ## Tech Stack
 

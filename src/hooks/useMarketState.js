@@ -24,6 +24,36 @@ function makeInitialCostHistory(qs, priors, beta) {
   return [{ step: 0, cost }];
 }
 
+function normalizeStateSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return null;
+  if (!Array.isArray(snapshot.outcomes) || snapshot.outcomes.length < 2) return null;
+  if (!Array.isArray(snapshot.priors) || snapshot.priors.length !== snapshot.outcomes.length) return null;
+  if (!Array.isArray(snapshot.qs) || snapshot.qs.length !== snapshot.outcomes.length) return null;
+  if (!Array.isArray(snapshot.deltaQs) || snapshot.deltaQs.length !== snapshot.outcomes.length) return null;
+
+  const beta = Number(snapshot.beta);
+  if (!Number.isFinite(beta) || beta <= 0) return null;
+
+  const outcomes = snapshot.outcomes.map(name => String(name || '').trim() || 'Outcome');
+  const qs = snapshot.qs.map(n => Number(n) || 0);
+  const deltaQs = snapshot.deltaQs.map(n => Number(n) || 0);
+  const priorsRaw = snapshot.priors.map(n => Math.max(Number(n) || 0, 0));
+  const sum = priorsRaw.reduce((acc, p) => acc + p, 0);
+  const priors = sum > 0 ? priorsRaw.map(p => p / sum) : outcomes.map(() => 1 / outcomes.length);
+
+  return {
+    beta,
+    outcomes,
+    priors,
+    qs,
+    deltaQs,
+    priceHistory: Array.isArray(snapshot.priceHistory) ? snapshot.priceHistory.slice(-MAX_HISTORY) : null,
+    costHistory: Array.isArray(snapshot.costHistory) ? snapshot.costHistory.slice(-MAX_HISTORY) : null,
+    tradeLog: Array.isArray(snapshot.tradeLog) ? snapshot.tradeLog.slice(0, 10) : null,
+    step: Number(snapshot.step) || 0,
+  };
+}
+
 export function useMarketState() {
   const [beta, setBeta] = useState(DEFAULT_BETA);
   const [outcomes, setOutcomes] = useState(DEFAULT_OUTCOMES);
@@ -146,6 +176,40 @@ export function useMarketState() {
     stepRef.current = 0;
   }, [outcomes, qs, deltaQs, priors, beta]);
 
+  const loadState = useCallback((snapshot) => {
+    const normalized = normalizeStateSnapshot(snapshot);
+    if (!normalized) return false;
+
+    setBeta(normalized.beta);
+    setOutcomes(normalized.outcomes);
+    setOutcomeIds(normalized.outcomes.map((_, i) => `o${i + 1}`));
+    idCounterRef.current = normalized.outcomes.length;
+    setPriors(normalized.priors);
+    setQs(normalized.qs);
+    setDeltaQs(normalized.deltaQs);
+    setPriceHistory(
+      normalized.priceHistory || makeInitialPriceHistory(normalized.qs, normalized.priors, normalized.beta)
+    );
+    setCostHistory(
+      normalized.costHistory || makeInitialCostHistory(normalized.qs, normalized.priors, normalized.beta)
+    );
+    setTradeLog(normalized.tradeLog || []);
+    stepRef.current = normalized.step;
+    return true;
+  }, []);
+
+  const exportState = useCallback(() => ({
+    beta,
+    outcomes,
+    priors,
+    qs,
+    deltaQs,
+    priceHistory,
+    costHistory,
+    tradeLog,
+    step: stepRef.current,
+  }), [beta, outcomes, priors, qs, deltaQs, priceHistory, costHistory, tradeLog]);
+
   const pendingTradeCost = computeTradeCost(qs, deltaQs, priors, beta);
 
   return {
@@ -169,5 +233,7 @@ export function useMarketState() {
     updatePrior,
     addOutcome,
     removeOutcome,
+    loadState,
+    exportState,
   };
 }
