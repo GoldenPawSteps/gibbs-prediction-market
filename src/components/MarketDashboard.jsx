@@ -16,6 +16,9 @@ export default function MarketDashboard({
   showEducation,
   setShowEducation,
   syncStatus,
+  balance,
+  onExecuteTrade,
+  tradeError,
 }) {
   return (
     <>
@@ -149,6 +152,15 @@ export default function MarketDashboard({
               <span className="stat-value mono">{fmt(market.legendreVal)}</span>
               <span className="stat-hint">approximately C(q) always</span>
             </div>
+            {balance !== null && (
+              <div className={`stat-card balance-card${balance < market.pendingTradeCost ? ' balance-low' : ''}`}>
+                <span className="stat-label">Balance</span>
+                <span className="stat-value mono">${fmt(balance)}</span>
+                {balance < market.pendingTradeCost && (
+                  <span className="stat-hint balance-warn">Insufficient for this trade</span>
+                )}
+              </div>
+            )}
           </div>
 
           <h3 className="subsection-title">
@@ -210,8 +222,13 @@ export default function MarketDashboard({
             <div className={`trade-cost ${market.pendingTradeCost >= 0 ? 'positive' : 'negative'}`}>
               Trade Cost: {market.pendingTradeCost >= 0 ? '+' : ''}{fmt(market.pendingTradeCost)}
             </div>
+            {tradeError && <span className="trade-error">{tradeError}</span>}
             <div className="trade-actions">
-              <button className="btn-primary" onClick={market.executeTrade}>
+              <button
+                className="btn-primary"
+                onClick={onExecuteTrade}
+                disabled={balance !== null && balance < market.pendingTradeCost}
+              >
                 Execute Trade
               </button>
               <button className="btn-secondary" onClick={market.resetMarket}>

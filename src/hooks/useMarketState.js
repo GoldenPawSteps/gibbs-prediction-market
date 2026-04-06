@@ -112,6 +112,34 @@ export function useMarketState() {
     setDeltaQs(deltaQs.map(() => 0));
   }, [qs, deltaQs, priors, beta]);
 
+  const applyTradeResult = useCallback(({ newQs, tradeCost, newPrices, newCost }) => {
+    setQs(newQs);
+    stepRef.current += 1;
+    const step = stepRef.current;
+
+    const newEntry = { step, ...Object.fromEntries(newPrices.map((p, i) => [`p${i}`, p])) };
+    setPriceHistory(prev => {
+      const next = [...prev, newEntry];
+      return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
+    });
+    setCostHistory(prev => {
+      const next = [...prev, { step, cost: newCost }];
+      return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
+    });
+    setTradeLog(prev => [
+      {
+        step,
+        deltaQs: [...deltaQs],
+        tradeCost,
+        newPrices,
+        newCost,
+        timestamp: new Date().toLocaleTimeString(),
+      },
+      ...prev.slice(0, 9),
+    ]);
+    setDeltaQs(deltaQs.map(() => 0));
+  }, [deltaQs]);
+
   const resetMarket = useCallback(() => {
     const n = outcomes.length;
     const uniformPrior = outcomes.map(() => 1 / n);
@@ -229,6 +257,7 @@ export function useMarketState() {
     deltaQs, setDeltaQs,
     pendingTradeCost,
     executeTrade,
+    applyTradeResult,
     resetMarket,
     updatePrior,
     addOutcome,

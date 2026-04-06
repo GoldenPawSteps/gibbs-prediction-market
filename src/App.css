@@ -416,6 +416,9 @@
   transition: var(--transition);
 }
 .stat-card.highlight { border-color: var(--accent); box-shadow: 0 0 12px var(--accent-glow); }
+.balance-card { grid-column: 1 / -1; border-color: var(--green); }
+.balance-card.balance-low { border-color: var(--red); }
+.balance-warn { color: var(--red); font-size: 10px; font-weight: 600; }
 
 .stat-label {
   font-size: 11px;
@@ -525,6 +528,14 @@
 .trade-actions {
   display: flex;
   gap: 8px;
+}
+
+.trade-error {
+  font-size: 12px;
+  color: var(--red);
+  font-weight: 600;
+  flex-basis: 100%;
+  order: -1;
 }
 
 /* === Charts === */

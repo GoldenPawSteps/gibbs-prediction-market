@@ -25,6 +25,7 @@ const EMAIL_VERIFY_TTL_SECONDS = 24 * 60 * 60;
 const PASSWORD_RESET_TTL_SECONDS = 60 * 60;
 const LOGIN_MAX_ATTEMPTS = Number(process.env.LOGIN_MAX_ATTEMPTS || 5);
 const LOGIN_LOCKOUT_SECONDS = Number(process.env.LOGIN_LOCKOUT_SECONDS || 15 * 60);
+const INITIAL_BALANCE = Number(process.env.INITIAL_BALANCE || 1000);
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:5173';
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'http://localhost:5173';
 const CSRF_ALLOW_MISSING_ORIGIN = String(process.env.CSRF_ALLOW_MISSING_ORIGIN || 'false') === 'true';
@@ -318,11 +319,31 @@ function buildResetEmailContent(email, token) {
   };
 }
 
+// --- Market math (server-side, mirrors src/math/marketMath.js) ---
+function _logSumExpWeighted(qs, priors, beta) {
+  const xs = qs.map((q, i) => Math.log(priors[i]) + q / beta);
+  const maxX = Math.max(...xs);
+  const sumExp = xs.reduce((acc, x) => acc + Math.exp(x - maxX), 0);
+  return maxX + Math.log(sumExp);
+}
+function _computeCost(qs, priors, beta) {
+  return beta * _logSumExpWeighted(qs, priors, beta);
+}
+function _computePrices(qs, priors, beta) {
+  const logZ = _logSumExpWeighted(qs, priors, beta);
+  return qs.map((q, i) => Math.exp(Math.log(priors[i]) + q / beta - logZ));
+}
+function _computeTradeCost(qs, deltaQs, priors, beta) {
+  const newQs = qs.map((q, i) => q + (deltaQs[i] || 0));
+  return _computeCost(newQs, priors, beta) - _computeCost(qs, priors, beta);
+}
+
 function sanitizeUser(userRecord) {
   return {
     id: userRecord.id,
     name: userRecord.name,
     email: userRecord.email,
+    balance: userRecord.balance ?? INITIAL_BALANCE,
     createdAt: userRecord.createdAt,
   };
 }
@@ -725,6 +746,7 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
       emailVerified: !smtpReady,
       emailVerificationTokenHash: smtpReady ? verifyToken.tokenHash : null,
       emailVerificationExpiresAt: smtpReady ? new Date(Date.now() + EMAIL_VERIFY_TTL_SECONDS * 1000).toISOString() : null,
+      balance: INITIAL_BALANCE,
       passwordResetTokenHash: null,
       passwordResetExpiresAt: null,
       refreshTokenHash: null,
@@ -1052,6 +1074,81 @@ app.put('/api/market-state', authMiddleware, async (req, res) => {
   });
 
   return res.json({ ok: true });
+});
+
+app.post('/api/trade', authMiddleware, async (req, res) => {
+  const deltaQs = req.body?.deltaQs;
+  const priors = req.body?.priors;
+  const beta = req.body?.beta;
+
+  if (!Array.isArray(deltaQs) || deltaQs.length < 2 || deltaQs.length > 20) {
+    return res.status(400).json({ error: 'Invalid deltaQs.' });
+  }
+  if (!Array.isArray(priors) || priors.length !== deltaQs.length) {
+    return res.status(400).json({ error: 'Priors length must match deltaQs.' });
+  }
+  if (typeof beta !== 'number' || !Number.isFinite(beta) || beta <= 0) {
+    return res.status(400).json({ error: 'Invalid beta.' });
+  }
+  if (!deltaQs.every(d => typeof d === 'number' && Number.isFinite(d))) {
+    return res.status(400).json({ error: 'deltaQs must be finite numbers.' });
+  }
+  if (!priors.every(p => typeof p === 'number' && Number.isFinite(p) && p > 0)) {
+    return res.status(400).json({ error: 'Priors must be positive finite numbers.' });
+  }
+
+  const priorsSum = priors.reduce((a, b) => a + b, 0);
+  const normPriors = priors.map(p => p / priorsSum);
+  const { userId, email } = req.auth;
+
+  // Read current market state for authoritative qs
+  const currentStates = readJson(MARKET_STATE_PATH);
+  const currentState = currentStates[userId] || {};
+  const currentQs =
+    Array.isArray(currentState.qs) && currentState.qs.length === deltaQs.length
+      ? currentState.qs.map(Number)
+      : deltaQs.map(() => 0);
+
+  const tradeCost = _computeTradeCost(currentQs, deltaQs, normPriors, beta);
+  const newQs = currentQs.map((q, i) => q + deltaQs[i]);
+  const newPrices = _computePrices(newQs, normPriors, beta);
+  const newCost = _computeCost(newQs, normPriors, beta);
+
+  // Deduct balance atomically
+  let newBalance;
+  let balanceError = null;
+  await withFileLock(USERS_PATH, () => {
+    const users = readJson(USERS_PATH);
+    const user = users[email];
+    if (!user) { balanceError = 'User not found.'; return; }
+    const balance = user.balance ?? INITIAL_BALANCE;
+    const proposed = balance - tradeCost;
+    if (proposed < -0.005) { balanceError = 'Insufficient balance.'; return; }
+    user.balance = Math.max(0, proposed);
+    newBalance = user.balance;
+    users[email] = user;
+    writeJson(USERS_PATH, users);
+  });
+
+  if (balanceError) {
+    return res.status(400).json({ error: balanceError });
+  }
+
+  // Save updated market state (new qs)
+  await withFileLock(MARKET_STATE_PATH, () => {
+    const states = readJson(MARKET_STATE_PATH);
+    states[userId] = {
+      ...(states[userId] || {}),
+      qs: newQs,
+      priors: normPriors,
+      beta,
+      updatedAt: new Date().toISOString(),
+    };
+    writeJson(MARKET_STATE_PATH, states);
+  });
+
+  logAuditEvent('trade.execute', { ip: getClientIp(req), userId, tradeCost });
+  return res.json({ ok: true, balance: newBalance, tradeCost, newQs, newPrices, newCost });
 });
 
 async function startServer() {

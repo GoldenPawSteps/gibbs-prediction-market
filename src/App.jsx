@@ -34,11 +34,22 @@ export default function App() {
   const [authDevTokenLabel, setAuthDevTokenLabel] = useState('');
   const [authPending, setAuthPending] = useState(false);
   const [syncStatus, setSyncStatus] = useState('idle');
+  const [balance, setBalance] = useState(null);
+  const [tradeError, setTradeError] = useState('');
 
   const market = useMarketState();
   const { loadState, exportState } = market;
   const auth = useAuth();
   const hasHydratedStateRef = useRef(false);
+
+  // Keep balance in sync with auth.user (login, me refresh, post-trade updates)
+  useEffect(() => {
+    if (auth.user) {
+      setBalance(auth.user.balance ?? null);
+    } else {
+      setBalance(null);
+    }
+  }, [auth.user]);
 
   useEffect(() => {
     if (!auth.user) {
@@ -196,6 +207,24 @@ export default function App() {
     }
   };
 
+  const handleExecuteTrade = async () => {
+    setTradeError('');
+    try {
+      const result = await api('/api/trade', {
+        method: 'POST',
+        body: JSON.stringify({
+          deltaQs: market.deltaQs,
+          priors: market.priors,
+          beta: market.beta,
+        }),
+      });
+      setBalance(result.balance);
+      market.applyTradeResult(result);
+    } catch (error) {
+      setTradeError(error instanceof Error ? error.message : 'Trade failed.');
+    }
+  };
+
   const handleLogout = async () => {
     try {
       await auth.logout();
@@ -300,6 +329,9 @@ export default function App() {
                   showEducation={showEducation}
                   setShowEducation={setShowEducation}
                   syncStatus={syncStatus}
+                  balance={balance}
+                  onExecuteTrade={handleExecuteTrade}
+                  tradeError={tradeError}
                 />
               ) : (
                 <Navigate to="/login" replace />
