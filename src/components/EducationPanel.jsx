@@ -158,7 +158,7 @@ const SECTIONS = [
   },
 ];
 
-export default function EducationPanel({ darkMode }) {
+export default function EducationPanel() {
   return (
     <div className="edu-panel">
       <h2 className="section-title">📚 Educational Reference</h2>

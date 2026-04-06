@@ -41,7 +41,7 @@ export default function App() {
       <main className="main">
         <div className="formula-banner">
           <MathFormula
-            formula="C(q) = \beta \ln \sum_{i=1}^n P_i \, e^{q_i/\beta}"
+            formula={String.raw`C(q) = \beta \ln \sum_{i=1}^n P_i \, e^{q_i/\beta}`}
             display
           />
         </div>
@@ -51,7 +51,7 @@ export default function App() {
           <div className="beta-row">
             <div className="beta-info">
               <label className="beta-label">
-                Liquidity Parameter <MathFormula formula="\beta" />
+                Liquidity Parameter <MathFormula formula={String.raw`\beta`} />
                 <span className="beta-val">{market.beta.toFixed(2)}</span>
               </label>
               <p className="beta-desc">
@@ -82,7 +82,7 @@ export default function App() {
             <div className="outcomes-list">
               {market.outcomes.map((name, i) => (
                 <div
-                  key={i}
+                  key={market.outcomeIds[i]}
                   className="outcome-row"
                   style={{ borderLeftColor: OUTCOME_COLORS[i % OUTCOME_COLORS.length] }}
                 >
@@ -173,7 +173,7 @@ export default function App() {
             </h3>
             <div className="prices-list">
               {market.outcomes.map((name, i) => (
-                <div key={i} className="price-row">
+                <div key={market.outcomeIds[i]} className="price-row">
                   <span className="price-label">{name}</span>
                   <div className="price-bar-wrap">
                     <div
@@ -190,11 +190,11 @@ export default function App() {
             </div>
 
             <h3 className="subsection-title">
-              Execute Trade <MathFormula formula="\Delta q" />
+              Execute Trade <MathFormula formula={String.raw`\Delta q`} />
             </h3>
             <div className="trade-inputs">
               {market.outcomes.map((name, i) => (
-                <div key={i} className="trade-row">
+                <div key={market.outcomeIds[i]} className="trade-row">
                   <span className="trade-label">{name}</span>
                   <input
                     type="range"
@@ -270,7 +270,7 @@ export default function App() {
                 <div className="info-theory-grid">
                   <div className="stat-card">
                     <span className="stat-label">
-                      <MathFormula formula="\mathbb{E}_{p_q}[q]" />
+                      <MathFormula formula={String.raw`\mathbb{E}_{p_q}[q]`} />
                     </span>
                     <span className="stat-value mono">
                       {fmt(market.qs.reduce((acc, q, i) => acc + q * market.prices[i], 0))}
@@ -278,7 +278,7 @@ export default function App() {
                   </div>
                   <div className="stat-card">
                     <span className="stat-label">
-                      <MathFormula formula="\beta \cdot D_{\mathrm{KL}}(p_q \| P)" />
+                      <MathFormula formula={String.raw`\beta \cdot D_{\mathrm{KL}}(p_q \| P)`} />
                     </span>
                     <span className="stat-value mono">{fmt(market.beta * market.kl)}</span>
                   </div>
@@ -293,7 +293,7 @@ export default function App() {
                 </div>
                 <div className="convexity-note">
                   <strong>Convexity:</strong> The Hessian of C(q) is the Fisher information matrix{' '}
-                  <MathFormula formula="\frac{1}{\beta}(\mathrm{diag}(p) - pp^\top) \succeq 0" />,
+                  <MathFormula formula={String.raw`\frac{1}{\beta}(\mathrm{diag}(p) - pp^\top) \succeq 0`} />,
                   ensuring no-arbitrage.
                 </div>
               </div>
@@ -348,7 +348,7 @@ export default function App() {
       <footer className="footer">
         <p>
           Gibbs Prediction Market &middot; Log-partition cost function &middot;{' '}
-          <MathFormula formula="C(q) = \beta \ln \mathbb{E}_P[e^{q/\beta}]" />
+          <MathFormula formula={String.raw`C(q) = \beta \ln \mathbb{E}_P[e^{q/\beta}]`} />
         </p>
       </footer>
     </div>

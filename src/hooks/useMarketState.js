@@ -12,20 +12,33 @@ const DEFAULT_OUTCOMES = ['Outcome A', 'Outcome B', 'Outcome C'];
 const DEFAULT_PRIORS = [1 / 3, 1 / 3, 1 / 3];
 const DEFAULT_QS = [0, 0, 0];
 const DEFAULT_BETA = 1.0;
+const MAX_HISTORY = 200;
+
+function makeInitialPriceHistory(qs, priors, beta) {
+  const prices = computePrices(qs, priors, beta);
+  return [{ step: 0, ...Object.fromEntries(prices.map((p, i) => [`p${i}`, p])) }];
+}
+
+function makeInitialCostHistory(qs, priors, beta) {
+  const cost = computeCost(qs, priors, beta);
+  return [{ step: 0, cost }];
+}
 
 export function useMarketState() {
   const [beta, setBeta] = useState(DEFAULT_BETA);
   const [outcomes, setOutcomes] = useState(DEFAULT_OUTCOMES);
+  // Stable per-outcome IDs -- never change for the lifetime of an outcome row
+  const [outcomeIds, setOutcomeIds] = useState(() => DEFAULT_OUTCOMES.map((_, i) => `o${i + 1}`));
+  const idCounterRef = useRef(DEFAULT_OUTCOMES.length);
+
   const [priors, setPriors] = useState(DEFAULT_PRIORS);
   const [qs, setQs] = useState(DEFAULT_QS);
-  const [priceHistory, setPriceHistory] = useState(() => {
-    const prices = computePrices(DEFAULT_QS, DEFAULT_PRIORS, DEFAULT_BETA);
-    return [{ step: 0, ...Object.fromEntries(prices.map((p, i) => [`p${i}`, p])) }];
-  });
-  const [costHistory, setCostHistory] = useState(() => {
-    const cost = computeCost(DEFAULT_QS, DEFAULT_PRIORS, DEFAULT_BETA);
-    return [{ step: 0, cost }];
-  });
+  const [priceHistory, setPriceHistory] = useState(() =>
+    makeInitialPriceHistory(DEFAULT_QS, DEFAULT_PRIORS, DEFAULT_BETA)
+  );
+  const [costHistory, setCostHistory] = useState(() =>
+    makeInitialCostHistory(DEFAULT_QS, DEFAULT_PRIORS, DEFAULT_BETA)
+  );
   const [tradeLog, setTradeLog] = useState([]);
   const [deltaQs, setDeltaQs] = useState(DEFAULT_QS.map(() => 0));
   const stepRef = useRef(0);
@@ -46,11 +59,15 @@ export function useMarketState() {
     stepRef.current += 1;
     const step = stepRef.current;
 
-    setPriceHistory(prev => [
-      ...prev,
-      { step, ...Object.fromEntries(newPrices.map((p, i) => [`p${i}`, p])) },
-    ]);
-    setCostHistory(prev => [...prev, { step, cost: newCost }]);
+    const newEntry = { step, ...Object.fromEntries(newPrices.map((p, i) => [`p${i}`, p])) };
+    setPriceHistory(prev => {
+      const next = [...prev, newEntry];
+      return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
+    });
+    setCostHistory(prev => {
+      const next = [...prev, { step, cost: newCost }];
+      return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
+    });
     setTradeLog(prev => [
       {
         step,
@@ -72,10 +89,8 @@ export function useMarketState() {
     setPriors(uniformPrior);
     setQs(zeroQs);
     setDeltaQs(zeroQs);
-    const resetPrices = computePrices(zeroQs, uniformPrior, beta);
-    const resetCost = computeCost(zeroQs, uniformPrior, beta);
-    setPriceHistory([{ step: 0, ...Object.fromEntries(resetPrices.map((p, i) => [`p${i}`, p])) }]);
-    setCostHistory([{ step: 0, cost: resetCost }]);
+    setPriceHistory(makeInitialPriceHistory(zeroQs, uniformPrior, beta));
+    setCostHistory(makeInitialCostHistory(zeroQs, uniformPrior, beta));
     setTradeLog([]);
     stepRef.current = 0;
   }, [outcomes, beta]);
@@ -83,7 +98,6 @@ export function useMarketState() {
   const updatePrior = useCallback((idx, val) => {
     const newPriors = [...priors];
     newPriors[idx] = val;
-    // Renormalize
     const sum = newPriors.reduce((a, b) => a + b, 0);
     const normalized = newPriors.map(p => p / sum);
     setPriors(normalized);
@@ -95,11 +109,21 @@ export function useMarketState() {
     const newPriors = newOutcomes.map(() => 1 / n);
     const newQs = [...qs, 0];
     const newDeltaQs = [...deltaQs, 0];
+
+    idCounterRef.current += 1;
+    const newId = `o${idCounterRef.current}`;
+
     setOutcomes(newOutcomes);
+    setOutcomeIds(prev => [...prev, newId]);
     setPriors(newPriors);
     setQs(newQs);
     setDeltaQs(newDeltaQs);
-  }, [outcomes, qs, deltaQs]);
+    // Reset history: index semantics change when outcomes are added
+    setPriceHistory(makeInitialPriceHistory(newQs, newPriors, beta));
+    setCostHistory(makeInitialCostHistory(newQs, newPriors, beta));
+    setTradeLog([]);
+    stepRef.current = 0;
+  }, [outcomes, qs, deltaQs, beta]);
 
   const removeOutcome = useCallback((idx) => {
     if (outcomes.length <= 2) return;
@@ -109,17 +133,25 @@ export function useMarketState() {
     const newPriors = priors.filter((_, i) => i !== idx);
     const sum = newPriors.reduce((a, b) => a + b, 0);
     const normalized = newPriors.map(p => p / sum);
+
     setOutcomes(newOutcomes);
+    setOutcomeIds(prev => prev.filter((_, i) => i !== idx));
     setQs(newQs);
     setDeltaQs(newDeltaQs);
     setPriors(normalized);
-  }, [outcomes, qs, deltaQs, priors]);
+    // Reset history: index semantics change when outcomes are removed
+    setPriceHistory(makeInitialPriceHistory(newQs, normalized, beta));
+    setCostHistory(makeInitialCostHistory(newQs, normalized, beta));
+    setTradeLog([]);
+    stepRef.current = 0;
+  }, [outcomes, qs, deltaQs, priors, beta]);
 
   const pendingTradeCost = computeTradeCost(qs, deltaQs, priors, beta);
 
   return {
     beta, setBeta,
     outcomes, setOutcomes,
+    outcomeIds,
     priors, setPriors,
     qs, setQs,
     prices,
