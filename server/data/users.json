@@ -9,13 +9,13 @@
     "emailVerificationExpiresAt": null,
     "passwordResetTokenHash": null,
     "passwordResetExpiresAt": null,
-    "refreshTokenHash": "$2b$10$ygmGlgyXl1Sng23.lqbx8.4ovAdNoAEhpBaD6r691XTfyZMeeNIZu",
-    "refreshTokenId": "131a7a4a-b376-4f0e-a384-1502fb76cde1",
+    "refreshTokenHash": "$2b$10$ub1UU1mqhXuS0FIFG8s0XOY7/TG/EsTm10rNdPR.gPNBNm118RWva",
+    "refreshTokenId": "cf020b3c-6bdf-4f2f-b238-0a97108b0ed5",
     "loginFailedAttempts": 0,
     "loginLockoutUntil": null,
     "createdAt": "2026-04-06T06:24:17.757Z",
-    "refreshTokenIssuedAt": "2026-04-06T07:23:27.996Z",
-    "balance": 1005.3591023878151
+    "refreshTokenIssuedAt": "2026-04-06T08:21:54.164Z",
+    "balance": 968.7063491574262
   },
   "baltest1775457507706@example.com": {
     "id": "u_1775457508251",

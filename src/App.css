@@ -1033,6 +1033,179 @@
 }
 .btn-resolve-outcome:hover { opacity: 0.75; }
 
+/* === General Measure Panel === */
+.gm-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.gm-toggle-btn { flex: 1; }
+.gm-count-badge {
+  display: inline-block;
+  background: #0ea5e9;
+  color: #fff;
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: 6px;
+}
+.gm-header-actions {
+  display: flex;
+  gap: 8px;
+}
+.gm-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.gm-create-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.gm-grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.gm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gm-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.gm-textarea {
+  min-height: 70px;
+  resize: vertical;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 10px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+.gm-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.gm-preview {
+  background: var(--bg-card);
+  border-left: 3px solid #0ea5e9;
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.gm-market-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.gm-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gm-card--resolved { opacity: 0.78; }
+.gm-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.gm-distribution {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  color: var(--text-muted);
+  overflow-x: auto;
+}
+.gm-trade-form,
+.gm-resolve-form {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gm-mode-row {
+  display: flex;
+  gap: 8px;
+}
+.gm-math-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gm-formula-block {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.gm-math-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  color: var(--text-muted);
+}
+.gm-focus-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  color: var(--text);
+  background: var(--bg-card);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+}
+.gm-copy-payloads {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
+}
+.gm-copy-header {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.gm-copy-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.gm-copy-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.gm-copy-notice {
+  color: var(--text-dim);
+}
+
+@media (max-width: 900px) {
+  .gm-grid2 {
+    grid-template-columns: 1fr;
+  }
+  .gm-math-grid,
+  .gm-focus-stats {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* === Footer === */
 .footer {
   border-top: 1px solid var(--border);

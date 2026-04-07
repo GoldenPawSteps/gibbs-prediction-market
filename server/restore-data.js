@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const USERS_PATH = resolve(process.env.DATA_USERS_PATH || join(__dirname, 'data', 'users.json'));
 const MARKET_STATE_PATH = resolve(process.env.DATA_MARKET_STATE_PATH || join(__dirname, 'data', 'marketStates.json'));
+const GENERAL_MARKETS_PATH = resolve(process.env.DATA_GENERAL_MARKETS_PATH || join(__dirname, 'data', 'generalMarkets.json'));
 const BACKUP_PATH = process.env.DATA_BACKUP_PATH ? resolve(process.env.DATA_BACKUP_PATH) : '';
 
 function sha256Buffer(buffer) {
@@ -52,9 +53,11 @@ function main() {
   const manifest = loadManifest();
   const restoredUsers = restoreEntry(manifest.files.users, USERS_PATH);
   const restoredMarketStates = restoreEntry(manifest.files.marketStates, MARKET_STATE_PATH);
+  const restoredGeneralMarkets = restoreEntry(manifest.files.generalMarkets, GENERAL_MARKETS_PATH);
 
   console.log(`Restored ${restoredUsers.targetPath}`);
   console.log(`Restored ${restoredMarketStates.targetPath}`);
+  console.log(`Restored ${restoredGeneralMarkets.targetPath}`);
 }
 
 main();

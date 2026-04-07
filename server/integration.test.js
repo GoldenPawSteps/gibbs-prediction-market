@@ -58,6 +58,7 @@ async function startServer(extraEnv = {}, initialUsers = {}, initialMarketStates
   const usersPath = await makeTempJsonFile(tempDir, 'users.json', initialUsers);
   const marketStatesPath = await makeTempJsonFile(tempDir, 'marketStates.json', initialMarketStates);
   const marketsPath = await makeTempJsonFile(tempDir, 'markets.json', initialMarkets);
+  const generalMarketsPath = await makeTempJsonFile(tempDir, 'generalMarkets.json', {});
   const port = nextPort;
   nextPort += 1;
   const logs = { stdout: '', stderr: '' };
@@ -74,6 +75,7 @@ async function startServer(extraEnv = {}, initialUsers = {}, initialMarketStates
       DATA_USERS_PATH: usersPath,
       DATA_MARKET_STATE_PATH: marketStatesPath,
       DATA_MARKETS_PATH: marketsPath,
+      DATA_GENERAL_MARKETS_PATH: generalMarketsPath,
       ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -94,6 +96,7 @@ async function startServer(extraEnv = {}, initialUsers = {}, initialMarketStates
     usersPath,
     marketStatesPath,
     marketsPath,
+    generalMarketsPath,
     logs,
     async stop() {
       if (child.exitCode === null) {
@@ -303,6 +306,90 @@ test('server integration coverage', async t => {
     }
   });
 
+  await t.test('general measure markets support functional trade and measure resolution', async () => {
+    const ctx = await startServer();
+
+    try {
+      const makerEmail = 'maker@example.com';
+      const takerEmail = 'taker@example.com';
+      const password = 'password123';
+
+      const makerRegister = await requestJson(ctx.baseUrl, '/api/auth/register', {
+        method: 'POST',
+        origin: ALLOWED_ORIGIN,
+        body: { name: 'Maker', email: makerEmail, password },
+      });
+      const takerRegister = await requestJson(ctx.baseUrl, '/api/auth/register', {
+        method: 'POST',
+        origin: ALLOWED_ORIGIN,
+        body: { name: 'Taker', email: takerEmail, password },
+      });
+      assert.equal(makerRegister.response.status, 201);
+      assert.equal(takerRegister.response.status, 201);
+
+      const makerLogin = await requestJson(ctx.baseUrl, '/api/auth/login', {
+        method: 'POST',
+        origin: ALLOWED_ORIGIN,
+        body: { email: makerEmail, password },
+      });
+      const takerLogin = await requestJson(ctx.baseUrl, '/api/auth/login', {
+        method: 'POST',
+        origin: ALLOWED_ORIGIN,
+        body: { email: takerEmail, password },
+      });
+      assert.equal(makerLogin.response.status, 200);
+      assert.equal(takerLogin.response.status, 200);
+
+      const makerCookie = extractCookieHeader(makerLogin.response);
+      const takerCookie = extractCookieHeader(takerLogin.response);
+
+      const createResult = await requestJson(ctx.baseUrl, '/api/general-markets', {
+        method: 'POST',
+        origin: ALLOWED_ORIGIN,
+        cookie: makerCookie,
+        body: {
+          question: 'General measure test market',
+          sampleSpace: [-1, 0, 1],
+          baseMeasureWeights: [0.2, 0.3, 0.5],
+          beta: 1,
+        },
+      });
+      assert.equal(createResult.response.status, 201);
+      const marketId = createResult.json.market.id;
+
+      const tradeResult = await requestJson(ctx.baseUrl, `/api/general-markets/${marketId}/trade`, {
+        method: 'POST',
+        origin: ALLOWED_ORIGIN,
+        cookie: takerCookie,
+        body: {
+          qExpr: '2*x + 1',
+        },
+      });
+      assert.equal(tradeResult.response.status, 200);
+      assert.equal(Array.isArray(tradeResult.json.impliedMeasure), true);
+      assert.equal(tradeResult.json.impliedMeasure.length, 3);
+
+      const resolveResult = await requestJson(ctx.baseUrl, `/api/general-markets/${marketId}/resolve`, {
+        method: 'POST',
+        origin: ALLOWED_ORIGIN,
+        cookie: makerCookie,
+        body: {
+          resolutionWeights: [0.1, 0.2, 0.7],
+        },
+      });
+      assert.equal(resolveResult.response.status, 200);
+      assert.equal(resolveResult.json.market.status, 'resolved');
+
+      const takerMe = await requestJson(ctx.baseUrl, '/api/auth/me', {
+        cookie: takerCookie,
+      });
+      assert.equal(takerMe.response.status, 200);
+      assert.ok(typeof takerMe.json.user.balance === 'number');
+    } finally {
+      await ctx.stop();
+    }
+  });
+
   await t.test('backup and restore scripts preserve file integrity', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'gibbs-data-ops-test-'));
     const backupRoot = await mkdtemp(join(tmpdir(), 'gibbs-data-backup-'));
@@ -314,10 +401,14 @@ test('server integration coverage', async t => {
       const marketStatesPath = await makeTempJsonFile(tempDir, 'marketStates.json', {
         u1: { beta: 0.5 },
       });
+      const generalMarketsPath = await makeTempJsonFile(tempDir, 'generalMarkets.json', {
+        g1: { id: 'g1', status: 'open' },
+      });
 
       const backupResult = await runNodeScript(BACKUP_ENTRY, {
         DATA_USERS_PATH: usersPath,
         DATA_MARKET_STATE_PATH: marketStatesPath,
+        DATA_GENERAL_MARKETS_PATH: generalMarketsPath,
         DATA_BACKUP_ROOT: backupRoot,
         DATA_BACKUP_NAME: 'test-backup',
       });
@@ -328,10 +419,12 @@ test('server integration coverage', async t => {
 
       await writeFile(usersPath, '{"broken":true}\n', 'utf8');
       await writeFile(marketStatesPath, '{"broken":true}\n', 'utf8');
+      await writeFile(generalMarketsPath, '{"broken":true}\n', 'utf8');
 
       const restoreResult = await runNodeScript(RESTORE_ENTRY, {
         DATA_USERS_PATH: usersPath,
         DATA_MARKET_STATE_PATH: marketStatesPath,
+        DATA_GENERAL_MARKETS_PATH: generalMarketsPath,
         DATA_BACKUP_PATH: backupDir,
       });
       assert.equal(restoreResult.code, 0, restoreResult.stderr);
@@ -340,9 +433,12 @@ test('server integration coverage', async t => {
       const usersBackup = await readFile(join(backupDir, 'users.json'));
       const marketRestored = await readFile(marketStatesPath);
       const marketBackup = await readFile(join(backupDir, 'marketStates.json'));
+      const generalRestored = await readFile(generalMarketsPath);
+      const generalBackup = await readFile(join(backupDir, 'generalMarkets.json'));
 
       assert.equal(hashFileContents(usersRestored), hashFileContents(usersBackup));
       assert.equal(hashFileContents(marketRestored), hashFileContents(marketBackup));
+      assert.equal(hashFileContents(generalRestored), hashFileContents(generalBackup));
     } finally {
       await rm(tempDir, { recursive: true, force: true });
       await rm(backupRoot, { recursive: true, force: true });

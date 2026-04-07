@@ -4,6 +4,7 @@ import EducationPanel from './EducationPanel';
 import ContinuousMode from './ContinuousMode';
 import { fmt } from '../math/formatNumber';
 import MarketMakingPanel from './MarketMakingPanel';
+import GeneralMeasurePanel from './GeneralMeasurePanel';
 
 const OUTCOME_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
 
@@ -339,13 +340,19 @@ export default function MarketDashboard({
           {showEducation ? '▼' : '▶'} Educational Reference
         </button>
         {showEducation && <EducationPanel darkMode={darkMode} />}
-
-            <MarketMakingPanel
-              userId={userId}
-              balance={balance}
-              onBalanceChange={onBalanceChange}
-            />
       </div>
+
+      <MarketMakingPanel
+        userId={userId}
+        balance={balance}
+        onBalanceChange={onBalanceChange}
+      />
+
+      <GeneralMeasurePanel
+        userId={userId}
+        balance={balance}
+        onBalanceChange={onBalanceChange}
+      />
     </>
   );
 }

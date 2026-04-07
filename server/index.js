@@ -6,6 +6,7 @@ import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
+import { Parser } from 'expr-eval';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -15,6 +16,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const USERS_PATH = process.env.DATA_USERS_PATH || join(__dirname, 'data', 'users.json');
 const MARKET_STATE_PATH = process.env.DATA_MARKET_STATE_PATH || join(__dirname, 'data', 'marketStates.json');
 const MARKETS_PATH = process.env.DATA_MARKETS_PATH || join(__dirname, 'data', 'markets.json');
+const GENERAL_MARKETS_PATH = process.env.DATA_GENERAL_MARKETS_PATH || join(__dirname, 'data', 'generalMarkets.json');
 
 const PORT = Number(process.env.PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
@@ -339,6 +341,91 @@ function _computeTradeCost(qs, deltaQs, priors, beta) {
   return _computeCost(newQs, priors, beta) - _computeCost(qs, priors, beta);
 }
 
+function _normalizePositiveWeights(weights, label) {
+  if (!Array.isArray(weights) || weights.length < 2 || weights.length > 512) {
+    throw new Error(`${label} must be an array with length 2..512.`);
+  }
+  if (!weights.every(w => typeof w === 'number' && Number.isFinite(w) && w > 0)) {
+    throw new Error(`${label} must contain positive finite numbers.`);
+  }
+  const total = weights.reduce((a, b) => a + b, 0);
+  return weights.map(w => w / total);
+}
+
+function _logSumExpGeneral(qValues, baseWeights, beta) {
+  const xs = qValues.map((q, i) => Math.log(baseWeights[i]) + q / beta);
+  const maxX = Math.max(...xs);
+  const sumExp = xs.reduce((acc, x) => acc + Math.exp(x - maxX), 0);
+  return maxX + Math.log(sumExp);
+}
+
+function _computeGeneralCost(qValues, baseWeights, beta) {
+  return beta * _logSumExpGeneral(qValues, baseWeights, beta);
+}
+
+function _computeGeneralTradeCost(cumulativeQ, tradeQ, baseWeights, beta) {
+  const nextQ = cumulativeQ.map((q, i) => q + tradeQ[i]);
+  return _computeGeneralCost(nextQ, baseWeights, beta) - _computeGeneralCost(cumulativeQ, baseWeights, beta);
+}
+
+function _computeGeneralImpliedMeasure(qValues, baseWeights, beta) {
+  const logZ = _logSumExpGeneral(qValues, baseWeights, beta);
+  return qValues.map((q, i) => Math.exp(Math.log(baseWeights[i]) + q / beta - logZ));
+}
+
+function _dotProduct(xs, ys) {
+  return xs.reduce((acc, x, i) => acc + x * ys[i], 0);
+}
+
+function _evaluateTradeFunction(expression, sampleSpace) {
+  if (typeof expression !== 'string' || !expression.trim()) {
+    throw new Error('qExpr must be a non-empty expression string.');
+  }
+
+  const parser = new Parser({
+    operators: {
+      logical: false,
+      comparison: false,
+      in: false,
+      assignment: false,
+    },
+  });
+  let compiled;
+  try {
+    compiled = parser.parse(expression);
+  } catch {
+    throw new Error('qExpr could not be parsed.');
+  }
+
+  return sampleSpace.map((omega, idx) => {
+    const scope = { omega };
+    if (typeof omega === 'number' && Number.isFinite(omega)) {
+      scope.x = omega;
+    }
+    if (omega && typeof omega === 'object' && !Array.isArray(omega)) {
+      for (const [key, value] of Object.entries(omega)) {
+        if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)
+          && typeof value === 'number'
+          && Number.isFinite(value)
+        ) {
+          scope[key] = value;
+        }
+      }
+    }
+
+    let value;
+    try {
+      value = compiled.evaluate(scope);
+    } catch {
+      throw new Error(`qExpr evaluation failed at sample index ${idx}.`);
+    }
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new Error(`qExpr produced a non-finite value at sample index ${idx}.`);
+    }
+    return value;
+  });
+}
+
 function sanitizeUser(userRecord) {
   return {
     id: userRecord.id,
@@ -366,6 +453,30 @@ function sanitizeMarket(m) {
     subsidyPaid: m.subsidyPaid,
     status: m.status,
     resolvedOutcomeIdx: m.resolvedOutcomeIdx,
+    createdAt: m.createdAt,
+    resolvedAt: m.resolvedAt,
+    traderCount: Object.keys(m.positions || {}).length,
+    positions,
+  };
+}
+
+function sanitizeGeneralMarket(m) {
+  const positions = Object.fromEntries(
+    Object.entries(m.positions || {}).map(([uid, pos]) => [uid, { qValues: pos.qValues }])
+  );
+  return {
+    id: m.id,
+    creatorId: m.creatorId,
+    creatorName: m.creatorName,
+    question: m.question,
+    beta: m.beta,
+    sampleSpace: m.sampleSpace,
+    baseMeasureWeights: m.baseMeasureWeights,
+    cumulativeQ: m.cumulativeQ,
+    currentCost: m.currentCost,
+    subsidyPaid: m.subsidyPaid,
+    status: m.status,
+    resolutionWeights: m.resolutionWeights,
     createdAt: m.createdAt,
     resolvedAt: m.resolvedAt,
     traderCount: Object.keys(m.positions || {}).length,
@@ -1367,6 +1478,229 @@ app.post('/api/markets/:id/resolve', authMiddleware, async (req, res) => {
   return res.json({ ok: true, market: sanitizeMarket(resolvedMarket), balance: newBalance });
 });
 
+// --- General Measure-Theoretic Markets ---
+
+app.post('/api/general-markets', authMiddleware, async (req, res) => {
+  const question = String(req.body?.question || '').trim();
+  const sampleSpace = req.body?.sampleSpace;
+  const baseMeasureWeightsRaw = req.body?.baseMeasureWeights;
+  const beta = req.body?.beta;
+
+  if (!question || question.length > 200) {
+    return res.status(400).json({ error: 'Question must be 1-200 characters.' });
+  }
+  if (!Array.isArray(sampleSpace) || sampleSpace.length < 2 || sampleSpace.length > 512) {
+    return res.status(400).json({ error: 'sampleSpace must be an array with length 2..512.' });
+  }
+  if (typeof beta !== 'number' || !Number.isFinite(beta) || beta <= 0 || beta > 100) {
+    return res.status(400).json({ error: 'beta must be a positive finite number <= 100.' });
+  }
+
+  let baseMeasureWeights;
+  try {
+    baseMeasureWeights = _normalizePositiveWeights(baseMeasureWeightsRaw, 'baseMeasureWeights');
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid baseMeasureWeights.' });
+  }
+  if (baseMeasureWeights.length !== sampleSpace.length) {
+    return res.status(400).json({ error: 'baseMeasureWeights length must match sampleSpace.' });
+  }
+
+  const minWeight = Math.min(...baseMeasureWeights);
+  const subsidy = beta * Math.log(1 / minWeight);
+  const { userId, email } = req.auth;
+  const marketId = `gmkt_${Date.now()}_${randomBytes(4).toString('hex')}`;
+  const createdAt = new Date().toISOString();
+
+  let newBalance;
+  let createError = null;
+  let creatorName = '';
+  await withFileLock(USERS_PATH, () => {
+    const users = readJson(USERS_PATH);
+    const user = users[email];
+    if (!user) { createError = 'User not found.'; return; }
+    const balance = user.balance ?? INITIAL_BALANCE;
+    if (balance - subsidy < -0.005) { createError = 'Insufficient balance to fund market liquidity.'; return; }
+    user.balance = Math.max(0, balance - subsidy);
+    newBalance = user.balance;
+    creatorName = user.name;
+    users[email] = user;
+    writeJson(USERS_PATH, users);
+  });
+  if (createError) return res.status(400).json({ error: createError });
+
+  const cumulativeQ = sampleSpace.map(() => 0);
+  const market = {
+    id: marketId,
+    creatorId: userId,
+    creatorName,
+    question,
+    beta,
+    sampleSpace,
+    baseMeasureWeights,
+    cumulativeQ,
+    currentCost: _computeGeneralCost(cumulativeQ, baseMeasureWeights, beta),
+    subsidyPaid: subsidy,
+    status: 'open',
+    resolutionWeights: null,
+    createdAt,
+    resolvedAt: null,
+    positions: {},
+  };
+
+  await withFileLock(GENERAL_MARKETS_PATH, () => {
+    const markets = readJson(GENERAL_MARKETS_PATH);
+    markets[marketId] = market;
+    writeJson(GENERAL_MARKETS_PATH, markets);
+  });
+
+  logAuditEvent('generalMarket.create', { ip: getClientIp(req), userId, marketId, question });
+  return res.status(201).json({ ok: true, market: sanitizeGeneralMarket(market), balance: newBalance });
+});
+
+app.get('/api/general-markets', authMiddleware, (req, res) => {
+  const markets = readJson(GENERAL_MARKETS_PATH);
+  const list = Object.values(markets)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .map(sanitizeGeneralMarket);
+  return res.json({ markets: list });
+});
+
+app.post('/api/general-markets/:id/trade', authMiddleware, async (req, res) => {
+  const { id: marketId } = req.params;
+  const { qExpr, qValues } = req.body || {};
+  const { userId, email } = req.auth;
+
+  const marketsSnap = readJson(GENERAL_MARKETS_PATH);
+  const market = marketsSnap[marketId];
+  if (!market) return res.status(404).json({ error: 'General market not found.' });
+  if (market.status !== 'open') return res.status(400).json({ error: 'General market is not open.' });
+
+  let tradeQ;
+  if (Array.isArray(qValues)) {
+    if (qValues.length !== market.sampleSpace.length) {
+      return res.status(400).json({ error: `qValues length must match sampleSpace length (${market.sampleSpace.length}).` });
+    }
+    if (!qValues.every(v => typeof v === 'number' && Number.isFinite(v))) {
+      return res.status(400).json({ error: 'qValues must contain finite numbers.' });
+    }
+    tradeQ = qValues;
+  } else {
+    try {
+      tradeQ = _evaluateTradeFunction(qExpr, market.sampleSpace);
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid qExpr.' });
+    }
+  }
+
+  const tradeCost = _computeGeneralTradeCost(
+    market.cumulativeQ,
+    tradeQ,
+    market.baseMeasureWeights,
+    market.beta
+  );
+  const nextQ = market.cumulativeQ.map((q, i) => q + tradeQ[i]);
+  const impliedMeasure = _computeGeneralImpliedMeasure(nextQ, market.baseMeasureWeights, market.beta);
+
+  let newBalance;
+  let tradeError = null;
+  await withFileLock(USERS_PATH, () => {
+    const users = readJson(USERS_PATH);
+    const user = users[email];
+    if (!user) { tradeError = 'User not found.'; return; }
+    const balance = user.balance ?? INITIAL_BALANCE;
+    if (balance - tradeCost < -0.005) { tradeError = 'Insufficient balance.'; return; }
+    user.balance = Math.max(0, balance - tradeCost);
+    newBalance = user.balance;
+    users[email] = user;
+    writeJson(USERS_PATH, users);
+  });
+  if (tradeError) return res.status(400).json({ error: tradeError });
+
+  let updatedMarket;
+  await withFileLock(GENERAL_MARKETS_PATH, () => {
+    const markets = readJson(GENERAL_MARKETS_PATH);
+    const m = markets[marketId];
+    if (!m || m.status !== 'open') return;
+    m.cumulativeQ = nextQ;
+    m.currentCost = _computeGeneralCost(nextQ, m.baseMeasureWeights, m.beta);
+    const prev = m.positions[userId];
+    m.positions[userId] = {
+      email,
+      qValues: prev ? prev.qValues.map((q, i) => q + tradeQ[i]) : [...tradeQ],
+    };
+    markets[marketId] = m;
+    writeJson(GENERAL_MARKETS_PATH, markets);
+    updatedMarket = m;
+  });
+  if (!updatedMarket) return res.status(409).json({ error: 'General market changed concurrently. Please retry.' });
+
+  logAuditEvent('generalMarket.trade', { ip: getClientIp(req), userId, marketId, tradeCost });
+  return res.json({
+    ok: true,
+    balance: newBalance,
+    tradeCost,
+    impliedMeasure,
+    market: sanitizeGeneralMarket(updatedMarket),
+  });
+});
+
+app.post('/api/general-markets/:id/resolve', authMiddleware, async (req, res) => {
+  const { id: marketId } = req.params;
+  const resolutionWeightsRaw = req.body?.resolutionWeights;
+  const { userId, email } = req.auth;
+
+  const marketsSnap = readJson(GENERAL_MARKETS_PATH);
+  const market = marketsSnap[marketId];
+  if (!market) return res.status(404).json({ error: 'General market not found.' });
+  if (market.creatorId !== userId) {
+    return res.status(403).json({ error: 'Only the creator can resolve this general market.' });
+  }
+  if (market.status !== 'open') {
+    return res.status(400).json({ error: 'General market is already resolved.' });
+  }
+
+  let resolutionWeights;
+  try {
+    resolutionWeights = _normalizePositiveWeights(resolutionWeightsRaw, 'resolutionWeights');
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid resolutionWeights.' });
+  }
+  if (resolutionWeights.length !== market.sampleSpace.length) {
+    return res.status(400).json({ error: 'resolutionWeights length must match sampleSpace.' });
+  }
+
+  await withFileLock(USERS_PATH, () => {
+    const users = readJson(USERS_PATH);
+    for (const pos of Object.values(market.positions || {})) {
+      const payout = _dotProduct(pos.qValues || [], resolutionWeights);
+      if (users[pos.email]) {
+        users[pos.email].balance = (users[pos.email].balance ?? INITIAL_BALANCE) + payout;
+      }
+    }
+    writeJson(USERS_PATH, users);
+  });
+
+  let resolvedMarket;
+  await withFileLock(GENERAL_MARKETS_PATH, () => {
+    const markets = readJson(GENERAL_MARKETS_PATH);
+    const m = markets[marketId];
+    if (!m) return;
+    m.status = 'resolved';
+    m.resolutionWeights = resolutionWeights;
+    m.resolvedAt = new Date().toISOString();
+    markets[marketId] = m;
+    writeJson(GENERAL_MARKETS_PATH, markets);
+    resolvedMarket = m;
+  });
+  if (!resolvedMarket) return res.status(409).json({ error: 'General market changed concurrently. Please retry.' });
+
+  const users = readJson(USERS_PATH);
+  const newBalance = users[email]?.balance ?? INITIAL_BALANCE;
+  logAuditEvent('generalMarket.resolve', { ip: getClientIp(req), userId, marketId });
+  return res.json({ ok: true, market: sanitizeGeneralMarket(resolvedMarket), balance: newBalance });
+});
+
 async function startServer() {
   if (DATA_ENCRYPTION.error) {
     throw new Error(DATA_ENCRYPTION.error);
@@ -1378,6 +1712,7 @@ async function startServer() {
   canDecryptJson(USERS_PATH);
   canDecryptJson(MARKET_STATE_PATH);
   canDecryptJson(MARKETS_PATH);
+  canDecryptJson(GENERAL_MARKETS_PATH);
   const encryptionHealth = refreshDataEncryptionHealth();
   if (encryptionHealth.migrationPending) {
     console.warn('WARNING: DATA_ENCRYPTION_KEY is set but one or more data files are still plaintext. Run `npm run migrate:data-encryption`.');

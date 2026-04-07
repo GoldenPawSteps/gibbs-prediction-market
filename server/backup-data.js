@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const USERS_PATH = resolve(process.env.DATA_USERS_PATH || join(__dirname, 'data', 'users.json'));
 const MARKET_STATE_PATH = resolve(process.env.DATA_MARKET_STATE_PATH || join(__dirname, 'data', 'marketStates.json'));
+const GENERAL_MARKETS_PATH = resolve(process.env.DATA_GENERAL_MARKETS_PATH || join(__dirname, 'data', 'generalMarkets.json'));
 const BACKUP_ROOT = resolve(process.env.DATA_BACKUP_ROOT || join(__dirname, 'backups'));
 const BACKUP_NAME = process.env.DATA_BACKUP_NAME
   || `backup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
@@ -40,12 +41,14 @@ function main() {
 
   const users = copyWithManifest(USERS_PATH, 'users.json');
   const marketStates = copyWithManifest(MARKET_STATE_PATH, 'marketStates.json');
+  const generalMarkets = copyWithManifest(GENERAL_MARKETS_PATH, 'generalMarkets.json');
   const manifest = {
     createdAt: new Date().toISOString(),
     backupDir: BACKUP_DIR,
     files: {
       users,
       marketStates,
+      generalMarkets,
     },
   };
 
